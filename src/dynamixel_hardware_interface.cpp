@@ -807,9 +807,14 @@ bool DynamixelHardware::CommReset()
   dxl_comm_->RWDataReset();
 
   auto start_time = this->now();
-  while ((this->now() - start_time) < rclcpp::Duration(3, 0)) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  while ((this->now() - start_time) < rclcpp::Duration(5, 0)) {
     RCLCPP_INFO_STREAM(logger_, "Reset Start");
+
+    // ── Reboot all motors at once, then wait a single boot period.
+    //   Sequential reboot (old approach) wasted n×200ms while individual
+    //   motors rebooted one-by-one.  Sending all reboot packets first and
+    //   waiting once cuts the torque-off window to ~500ms regardless of how
+    //   many motors are on the bus.
     bool result = true;
     for (auto pr : dxl_comm_id_id_) {
       if (dxl_comm_->Reboot(pr.first) != DxlError::OK) {
@@ -817,9 +822,17 @@ bool DynamixelHardware::CommReset()
         result = false;
         break;
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
-    if (!result) {continue;}
+    if (!result) {
+      // Brief pause before retrying the entire sequence
+      std::this_thread::sleep_for(std::chrono::milliseconds(500));
+      continue;
+    }
+
+    // Single wait for all motors to finish their internal reboot
+    // (X-series ≈200ms, keep 500ms for margin; Y-series may need more)
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
     // if (!InitControllerItems()) {continue;}
     // if (!InitDxlItems()) {continue;}
     if (!InitDxlReadItems()) {continue;}
@@ -853,8 +866,9 @@ bool DynamixelHardware::CommReset()
       }
     }
 
+    // start() internally waits for ReadMultiDxlData to succeed (its own retry
+    // loop), so no extra sleep is needed here before calling it.
     RCLCPP_INFO_STREAM(logger_, "RESET Success");
-    std::this_thread::sleep_for(std::chrono::seconds(1));
     start();
     // Arm the freeze: keep overriding stale controller goals for N write cycles
     post_reboot_freeze_cycles_ = REBOOT_FREEZE_CYCLES;
@@ -862,7 +876,6 @@ bool DynamixelHardware::CommReset()
     return true;
   }
   RCLCPP_ERROR_STREAM(logger_, "RESET Failure");
-  std::this_thread::sleep_for(std::chrono::seconds(1));
   start();
   return false;
 }
@@ -1474,7 +1487,7 @@ void DynamixelHardware::SyncJointCommandWithStates()
         size_t state_idx = std::distance(it_states.interface_name_vec.begin(), state_it);
         // Sync the value
         *it_commands.value_ptr_vec.at(cmd_idx) = *it_states.value_ptr_vec.at(state_idx);
-        RCLCPP_INFO_STREAM(
+        RCLCPP_DEBUG_STREAM(
           logger_, "Sync joint state to command (joint: " << it_states.name << ", " <<
             it_commands.interface_name_vec.at(cmd_idx).c_str() << ", " <<
             *it_commands.value_ptr_vec.at(cmd_idx) << " <- " <<
