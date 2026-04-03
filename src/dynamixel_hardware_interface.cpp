@@ -787,7 +787,8 @@ DxlError DynamixelHardware::CheckError(DxlError dxl_comm_err)
 bool DynamixelHardware::CommReset()
 {
   dxl_status_ = REBOOTING;
-  stop();
+  // NOTE: we intentionally do NOT call stop() here so that torque is never
+  // disabled during a comm-reset / reboot sequence.
   RCLCPP_INFO_STREAM(logger_, "Communication Reset Start");
   dxl_comm_->RWDataReset();
 
@@ -809,6 +810,34 @@ bool DynamixelHardware::CommReset()
     // if (!InitDxlItems()) {continue;}
     if (!InitDxlReadItems()) {continue;}
     if (!InitDxlWriteItems()) {continue;}
+
+    // ── Snapshot: read present position from each motor and write it back
+    //   as Goal Position BEFORE enabling torque.  This prevents the stale
+    //   command value that ros2_control may hold from snapping the motor to
+    //   an old goal the moment torque is switched on.
+    RCLCPP_INFO_STREAM(logger_, "[CommReset] Locking goal positions to present positions ...");
+    for (const auto & pr : dxl_comm_id_id_) {
+      uint8_t comm_id = pr.first;
+      uint8_t id      = pr.second;
+      uint32_t present_pos = 0;
+      if (dxl_comm_->ReadItem(comm_id, id, "Present Position", present_pos) == DxlError::OK) {
+        RCLCPP_INFO(
+          logger_,
+          "[CommReset] ID:%d  Present Position=%u -> writing as Goal Position",
+          static_cast<int>(id), present_pos);
+        if (dxl_comm_->WriteItem(comm_id, id, "Goal Position", present_pos) != DxlError::OK) {
+          RCLCPP_WARN(
+            logger_,
+            "[CommReset] ID:%d  Failed to write Goal Position",
+            static_cast<int>(id));
+        }
+      } else {
+        RCLCPP_WARN(
+          logger_,
+          "[CommReset] ID:%d  Failed to read Present Position",
+          static_cast<int>(id));
+      }
+    }
 
     RCLCPP_INFO_STREAM(logger_, "RESET Success");
     std::this_thread::sleep_for(std::chrono::seconds(1));
