@@ -901,9 +901,11 @@ bool DynamixelHardware::CommReset()
     // start() internally waits for ReadMultiDxlData to succeed (its own retry
     // loop), so no extra sleep is needed here before calling it.
     RCLCPP_INFO_STREAM(logger_, "RESET Success");
-    start();
-    // Arm the freeze: keep overriding stale controller goals for N write cycles
+    // ── Arm freeze BEFORE start() / DynamixelEnable so that write() loop
+    //   sees the freeze counter the instant dxl_status_ becomes DXL_OK.
+    //   Only CommReset sets this counter; start() does NOT touch it.
     post_reboot_freeze_cycles_ = REBOOT_FREEZE_CYCLES;
+    start();
     dxl_status_ = DXL_OK;
     return true;
   }

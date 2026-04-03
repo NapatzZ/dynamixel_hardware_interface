@@ -1174,13 +1174,6 @@ DxlError Dynamixel::SetSyncReadItemAndHandler()
     id_arr.push_back(it_read_data.comm_id);
   }
 
-  {
-    std::vector<std::pair<uint8_t, uint8_t>> pairs;
-    for (auto it_read_data : read_data_list_) {
-      pairs.emplace_back(it_read_data.comm_id, it_read_data.comm_id);
-    }
-    DynamixelDisable(pairs);
-  }
   ResetIndirectRead(id_arr);
 
   for (auto it_read_data : read_data_list_) {
@@ -1988,13 +1981,6 @@ DxlError Dynamixel::SetSyncWriteItemAndHandler()
     id_arr.push_back(it_write_data.comm_id);
   }
 
-  {
-    std::vector<std::pair<uint8_t, uint8_t>> pairs;
-    for (auto cid : id_arr) {
-      pairs.emplace_back(cid, cid);
-    }
-    DynamixelDisable(pairs);
-  }
   ResetIndirectWrite(id_arr);
 
   for (auto it_write_data : write_data_list_) {
