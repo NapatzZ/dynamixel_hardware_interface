@@ -570,9 +570,41 @@ hardware_interface::CallbackReturn DynamixelHardware::start()
 
   CalcTransmissionToJoint();
 
-  SyncJointCommandWithStates();
+  // ── Direct transmission-level goal sync ────────────────────────────────────
+  // Do NOT use SyncJointCommandWithStates() → CalcJointToTransmission() here.
+  // hdl_joint_commands_ is shared memory that active ros2_control controllers
+  // write to on every control cycle — including while CommReset() is running in
+  // the service thread.  By the time CalcJointToTransmission() reads it, the
+  // stale controller goal has already overwritten the synced value, so
+  // WriteMultiDxlData() would send the wrong (pre-reboot) goal and
+  // DynamixelEnable() would snap the arm to that pose.
+  //
+  // Instead, copy Present Position → Goal Position directly at the transmission
+  // (motor) level, bypassing hdl_joint_commands_ entirely.
+  for (auto & cmd : hdl_trans_commands_) {
+    auto goal_it = std::find(
+      cmd.interface_name_vec.begin(), cmd.interface_name_vec.end(), "Goal Position");
+    if (goal_it == cmd.interface_name_vec.end()) {continue;}
+    size_t goal_idx = std::distance(cmd.interface_name_vec.begin(), goal_it);
 
-  CalcJointToTransmission();
+    for (const auto & state : hdl_trans_states_) {
+      if (state.id != cmd.id || state.comm_id != cmd.comm_id) {continue;}
+      auto pos_it = std::find(
+        state.interface_name_vec.begin(), state.interface_name_vec.end(), "Present Position");
+      if (pos_it == state.interface_name_vec.end()) {break;}
+      size_t pos_idx = std::distance(state.interface_name_vec.begin(), pos_it);
+      *cmd.value_ptr_vec.at(goal_idx) = *state.value_ptr_vec.at(pos_idx);
+      RCLCPP_DEBUG(
+        logger_, "[start] ID:%d  Present=%.1f -> Goal Position",
+        static_cast<int>(cmd.id), *state.value_ptr_vec.at(pos_idx));
+      break;
+    }
+  }
+  // ───────────────────────────────────────────────────────────────────────────
+
+  // Also sync joint commands so the controller sees the current position
+  // (prevents a large setpoint jump when it resumes writing).
+  SyncJointCommandWithStates();
 
   dxl_comm_->WriteMultiDxlData();
 
