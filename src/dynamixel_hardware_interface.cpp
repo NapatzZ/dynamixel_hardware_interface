@@ -1516,6 +1516,49 @@ void DynamixelHardware::reboot_dxl_srv_callback(
   [[maybe_unused]] const std::shared_ptr<dynamixel_interfaces::srv::RebootDxl::Request> request,
   std::shared_ptr<dynamixel_interfaces::srv::RebootDxl::Response> response)
 {
+  // ── Step 1: Snapshot current position of every DXL and set it as Goal
+  //            Position, then reset Profile Velocity to default (0).
+  //            This guarantees the motor holds its current pose after reboot
+  //            instead of snapping to a stale goal or flying at full speed.
+  for (const auto & pr : dxl_comm_id_id_) {
+    uint8_t comm_id = pr.first;
+    uint8_t id      = pr.second;
+
+    uint32_t present_pos = 0;
+    if (dxl_comm_->ReadItem(comm_id, id, "Present Position", present_pos) == DxlError::OK) {
+      RCLCPP_INFO(
+        logger_,
+        "[reboot_dxl_srv_callback] ID:%d  Present Position=%u -> writing as Goal Position",
+        static_cast<int>(id), present_pos);
+
+      if (dxl_comm_->WriteItem(comm_id, id, "Goal Position", present_pos) != DxlError::OK) {
+        RCLCPP_WARN(
+          logger_,
+          "[reboot_dxl_srv_callback] ID:%d  Failed to write Goal Position",
+          static_cast<int>(id));
+      }
+    } else {
+      RCLCPP_WARN(
+        logger_,
+        "[reboot_dxl_srv_callback] ID:%d  Failed to read Present Position",
+        static_cast<int>(id));
+    }
+
+    // Reset Profile Velocity to 0 (= use maximum velocity, i.e. default)
+    if (dxl_comm_->WriteItem(comm_id, id, "Profile Velocity", 0) != DxlError::OK) {
+      RCLCPP_WARN(
+        logger_,
+        "[reboot_dxl_srv_callback] ID:%d  Failed to reset Profile Velocity",
+        static_cast<int>(id));
+    } else {
+      RCLCPP_INFO(
+        logger_,
+        "[reboot_dxl_srv_callback] ID:%d  Profile Velocity reset to 0 (default)",
+        static_cast<int>(id));
+    }
+  }
+
+  // ── Step 2: Perform the actual communication reset / reboot
   if (CommReset()) {
     response->result = true;
     RCLCPP_INFO_STREAM(logger_, "[reboot_dxl_srv_callback] SUCCESS");
