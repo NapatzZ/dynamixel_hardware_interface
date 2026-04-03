@@ -674,6 +674,20 @@ hardware_interface::return_type DynamixelHardware::write(
 
     ChangeDxlTorqueState();
 
+    // ── Post-reboot freeze ──────────────────────────────────────────────────
+    // For REBOOT_FREEZE_CYCLES cycles after a reboot we override whatever the
+    // controller wrote to the joint command interfaces with the actual present
+    // position read from the motor.  This prevents the controller's stale goal
+    // from snapping the motor the moment torque is re-enabled.
+    if (post_reboot_freeze_cycles_ > 0) {
+      SyncJointCommandWithStates();
+      post_reboot_freeze_cycles_--;
+      RCLCPP_INFO_STREAM_THROTTLE(
+        logger_, clock_, 500,
+        "[write] Post-reboot freeze active, cycles remaining: " << post_reboot_freeze_cycles_.load());
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
     CalcJointToTransmission();
 
     dxl_comm_->WriteMultiDxlData();
@@ -842,6 +856,8 @@ bool DynamixelHardware::CommReset()
     RCLCPP_INFO_STREAM(logger_, "RESET Success");
     std::this_thread::sleep_for(std::chrono::seconds(1));
     start();
+    // Arm the freeze: keep overriding stale controller goals for N write cycles
+    post_reboot_freeze_cycles_ = REBOOT_FREEZE_CYCLES;
     dxl_status_ = DXL_OK;
     return true;
   }
@@ -1479,6 +1495,9 @@ void DynamixelHardware::ChangeDxlTorqueState()
     RCLCPP_WARN_STREAM(logger_, "Requested to enable torque, Enabling torque for all Dynamixels");
     dxl_comm_->DynamixelEnable(torque_enabled_comm_id_id_);
     SyncJointCommandWithStates();
+    // Arm the post-enable freeze so that the controller's stale goal does not
+    // snap the motor on subsequent write() cycles (same mechanism as reboot).
+    post_reboot_freeze_cycles_ = REBOOT_FREEZE_CYCLES;
   } else if (dxl_torque_status_ == REQUESTED_TO_DISABLE) {
     RCLCPP_WARN_STREAM(logger_, "Requested to disable torque, Disabling torque for all Dynamixels");
     dxl_comm_->DynamixelDisable(torque_enabled_comm_id_id_);

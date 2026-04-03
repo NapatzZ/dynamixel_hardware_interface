@@ -17,6 +17,7 @@
 #ifndef DYNAMIXEL_HARDWARE_INTERFACE__DYNAMIXEL_HARDWARE_INTERFACE_HPP_
 #define DYNAMIXEL_HARDWARE_INTERFACE__DYNAMIXEL_HARDWARE_INTERFACE_HPP_
 
+#include <atomic>
 #include <memory>
 #include <string>
 #include <vector>
@@ -190,6 +191,13 @@ private:
   rclcpp::Duration write_error_duration_{0, 0};
   bool is_read_in_error_{false};
   bool is_write_in_error_{false};
+
+  // After a CommReset / reboot, hold the motor at its present position for this
+  // many write() cycles before letting the controllers send their goals again.
+  // This prevents the stale goal buffered in the controller from snapping the
+  // motor as soon as torque is re-enabled.
+  std::atomic<int> post_reboot_freeze_cycles_{0};
+  static constexpr int REBOOT_FREEZE_CYCLES = 200;  // ~200 ms at 1 kHz
 
   bool use_revolute_to_prismatic_{false};
   std::string conversion_dxl_name_{""};
